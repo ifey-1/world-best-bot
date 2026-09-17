@@ -2,7 +2,7 @@ import os, time, asyncio, requests
 from telegram.ext import Application
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)
 seen = {}
 
 def get_rugcheck(a):
