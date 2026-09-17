@@ -1,6 +1,7 @@
 import os, time, threading, requests
 from flask import Flask
 from datetime import datetime
+
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -71,7 +72,7 @@ def is_gem(coin):
 
 def scanner():
     global calls_today, last_day
-    send("🚀 <b>V7 SAFE BOT LIVE - FIXED!</b>\n\n✅ No Rate Limit Ban\n✅ Liquidity >$50k Check\n✅ Correct Chain Address\n✅ SL/TP Included\n✅ MEXC + DEX Links\n✅ 1-3 BEST/DAY 2X-50X")
+    send("🚀 <b>V7 ALL-IN LIVE!</b>\n✅ 1-3 BEST/DAY | MEME + CEX | SL/TP | 2X-50X")
     time.sleep(5)
     while True:
         try:
@@ -94,13 +95,13 @@ def scanner():
                 pct = ((price-entry)/entry*100) if entry else 0
                 sym = data['symbol']
                 if pct >= 95 and not data.get('s2x'):
-                    send(f"💥 <b>{sym} 2X HIT +{pct:.0f}%</b>\nEntry ${entry} -> ${price}\n🔴 SELL 50% at 2X\n🟢 HOLD 50%")
+                    send(f"💥 <b>{sym} 2X HIT +{pct:.0f}%</b>\nEntry ${entry} -> ${price}\n🔴 SELL 50% at 2X | HOLD 50%")
                     data['s2x']=True
                 elif pct >= 400 and not data.get('s5x'):
-                    send(f"🚀 <b>{sym} 5X HIT +{pct:.0f}%</b>\n🔴 SELL 75%\n🟢 HOLD 25% for 50X")
+                    send(f"🚀 <b>{sym} 5X HIT +{pct:.0f}%</b>\n🔴 SELL 75% | HOLD 25% for 50X")
                     data['s5x']=True
                 elif pct <= -20:
-                    send(f"⚠️ <b>{sym} SL -20% HIT</b>\n🔴 SELL ALL - Save capital")
+                    send(f"⚠️ <b>{sym} SL -20% HIT</b>\n🔴 SELL ALL")
                     del active_calls[cid]
 
             if calls_today >= 3:
@@ -134,7 +135,7 @@ def scanner():
                 mcap = best.get('market_cap',0)/1_000_000
                 vol = best.get('total_volume',0)/1_000_000
 
-                if mcap < 2: potential = "20X-50X 💎"
+                if mcap < 2: potential = "20X-50X MEME 💎"
                 elif mcap < 8: potential = "10X-20X 🔥"
                 else: potential = "2X-5X"
 
@@ -147,29 +148,23 @@ def scanner():
                 msg = f"""🎯 <b>BEST GEM #{calls_today} - {potential}</b>
 🔥 ${sym} ({name})
 
-💰 <b>ENTRY ZONE:</b>
-${entry:.8f} - ${entry*1.03:.8f}
+💰 ENTRY: ${entry:.8f} - ${entry*1.03:.8f}
 ⚡ Market Buy NOW!
 
-🛡️ <b>STOP LOSS:</b>
-${sl:.8f} (-20%)
-SELL ALL if hits
-
-🎯 <b>TAKE PROFIT:</b>
-TP1 ${tp1:.8f} (2X) = SELL 50%
-TP2 ${tp2:.8f} (5X) = SELL 25%
-TP3 ${tp3:.8f} (10X+) = HOLD 25%
+🛡️ SL: ${sl:.8f} (-20%)
+🎯 TP1 ${tp1:.8f} (2X) = SELL 50%
+🎯 TP2 ${tp2:.8f} (5X) = SELL 25%
+🎯 TP3 ${tp3:.8f} (10X+) = HOLD 25%
 
 📊 MCap ${mcap:.2f}M | Vol ${vol:.1f}M | Liq ${liq/1000:.0f}k | 1h +{ch1:.1f}%
 
-📜 <b>CONTRACT - TAP TO COPY:</b>
+📜 CONTRACT:
 <code>{addr}</code>
 Chain: {chain}
 
-🛒 <b>BUY NOW:</b>
+🛒 BUY:
 DEX: https://dexscreener.com/{chain.lower()}/{addr}
 MEXC: https://www.mexc.com/exchange/{sym}_USDT
-Gate: https://www.gate.io/trade/{sym}_USDT
 
 🧠 Risk 2% per trade!"""
 
@@ -184,8 +179,9 @@ Gate: https://www.gate.io/trade/{sym}_USDT
 
 @app.route('/')
 def home():
-    return f"V7 SAFE BOT ALWAYS RUNNING - {calls_today}/3 today"
+    return f"V7 ALL-IN RUNNING - {calls_today}/3 today - {len(active_calls)} active"
 
 threading.Thread(target=scanner, daemon=True).start()
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
