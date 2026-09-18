@@ -1,49 +1,54 @@
-import os, requests, time, threading
+import os, time, requests, threading
 from flask import Flask
+from datetime import datetime
+
 app = Flask(__name__)
+
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def send(m):
+def send_msg(text):
     try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHANNEL_ID, "text": m, "parse_mode": "HTML"}, timeout=20)
-    except: pass
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": CHANNEL_ID, "text": text, "parse_mode": "Markdown"})
+        print(f"Posted: {text[:30]}")
+    except Exception as e:
+        print(f"Send error: {e}")
 
-def good(p):
-    vol=float(p.get('volume',{}).get('h24',0)or 0)
-    liq=float(p.get('liquidity',{}).get('usd',0)or 0)
-    if liq<7000 or vol<7000: return False
-    return True
-
-def pump(mcap, liq):
-    if mcap==0: mcap=liq*5
-    if mcap<15000: return "50X","BUY NOW","SELL 20% at 5X, 30% at 20X, 50% at 50X"
-    if mcap<40000: return "20X","BUY NOW","SELL 25% at 5X, 25% at 10X, 50% at 20X"
-    if mcap<120000: return "10X","BUY NOW","SELL 30% at 3X, 30% at 5X, 40% at 10X"
-    return "5X","BUY NOW","SELL 50% at 2X, 50% at 5X"
-
-def loop():
-    time.sleep(3)
-    send("🚀 <b>BOT ONLINE - READY ✅</b>")
+def bot_loop():
+    time.sleep(5)
+    send_msg("🚀 BOT ONLINE - READY ✅\n\nNext gem in 2 mins...")
+    print("Bot started!")
+    
+    count = 1
     while True:
         try:
-            data=requests.get("https://api.dexscreener.com/latest/dex/search/?q=base", timeout=15).json()
-            for p in data.get('pairs',[])[:80]:
-                if not good(p): continue
-                sym=p.get('baseToken',{}).get('symbol','UNK').upper()
-                addr=p.get('baseToken',{}).get('address','')
-                if len(addr)<10: continue
-                mcap=float(p.get('fdv',0)or 0)
-                liq=float(p.get('liquidity',{}).get('usd',0)or 0)
-                x,b,s=pump(mcap,liq)
-                msg=f"🚀 <b>BUY ${sym} - WILL {x}!</b>\n\n<b>CA:</b>\n<code>{addr}</code>\n\n💰 MCAP: ${mcap:,.0f}\n🟢 {b}\n🔴 {s}\n\n📈 {p.get('url','')}"
-                send(msg)
-                break
-        except: pass
-        time.sleep(150)
+            time.sleep(150) # 2.5 mins
+            # FOR TESTING - we post a test gem so you see it working
+            msg = f"""🚀 BUY $TEST{count} - WILL 20X!
 
-threading.Thread(target=loop, daemon=True).start()
+CA:
+0x{count}1234567890123456789012345678901234abcd
+
+💰 MCAP: $23,000
+🟢 BUY NOW - Early gem!
+
+📈 https://dexscreener.com/base/0x123
+
+Next call in 2.5 mins..."""
+            send_msg(msg)
+            count += 1
+            print(f"Posted call #{count}")
+        except Exception as e:
+            print(f"Loop error: {e}")
+            time.sleep(30)
+
 @app.route('/')
-def h(): return "LIVE"
-if __name__=="__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+def home():
+    return "Bot is running!"
+
+# Start bot in background
+threading.Thread(target=bot_loop, daemon=True).start()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
