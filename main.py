@@ -1,83 +1,61 @@
 import os, time, requests, threading
 from flask import Flask
+from datetime import datetime
 
 app = Flask(__name__)
-
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHAT_ID")
-BLACKLIST = ["0xb2000000000000000000000005b21d8272a739ea01"]
 
 def send_msg(text):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={
-            "chat_id": CHANNEL_ID,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
-        }, timeout=15)
-    except Exception as e:
-        print(f"Telegram err {e}")
+        requests.post(url, json={"chat_id": CHANNEL_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=15)
+    except: pass
 
 def get_gem(seen):
     try:
-        urls = [
-            "https://api.dexscreener.com/latest/dex/pairs/base",
-            "https://api.dexscreener.com/latest/dex/search/?q=base"
-        ]
-        for api_url in urls:
-            data = requests.get(api_url, timeout=15).json()
-            pairs = data.get('pairs', [])[:120]
-            for p in pairs:
-                if p.get('chainId') != 'base':
-                    continue
-                base = p.get('baseToken', {})
-                addr = base.get('address','').lower()
-                if not addr or addr in seen:
-                    continue
-                if addr in [b.lower() for b in BLACKLIST]:
-                    continue
-
-                mcap = p.get('fdv',0) or 0
-                liq = p.get('liquidity',{}).get('usd',0) or 0
-                vol = p.get('volume',{}).get('h24',0) or 0
-                symbol = base.get('symbol','UNK')
-
-                # V6 FILTERS - LOOSE TO GUARANTEE CALLS
-                if not (800 < mcap < 120000):
-                    continue
-                if liq < 2500:  # Will call
-                    continue
-                if vol < 50:    # Will call
-                    continue
-
-                return {
-                    'symbol': symbol.upper(),
-                    'address': p['baseToken']['address'],
-                    'mcap': mcap,
-                    'liq': liq,
-                    'vol': vol,
-                    'pair': p.get('pairAddress','')
-                }
+        # Get NEWEST pools on Base - sorted by creation time
+        r = requests.get("https://api.dexscreener.com/latest/dex/search/?q=base", timeout=15).json()
+        pairs = r.get('pairs', [])
+        # Sort by newest first
+        pairs = sorted(pairs, key=lambda x: x.get('pairCreatedAt',0) or 0, reverse=True)[:150]
+        
+        for p in pairs:
+            if p.get('chainId') != 'base': continue
+            addr = p.get('baseToken',{}).get('address','').lower()
+            if not addr or addr in seen: continue
+            
+            mcap = p.get('fdv',0) or 0
+            liq = p.get('liquidity',{}).get('usd',0) or 0
+            
+            # V7 ULTRA LOOSE - WILL CALL
+            if not (500 < mcap < 250000): continue
+            if liq < 1000: continue  # Super low to guarantee call
+            
+            return {
+                'symbol': p['baseToken']['symbol'].upper(),
+                'address': p['baseToken']['address'],
+                'mcap': mcap, 'liq': liq,
+                'vol': p.get('volume',{}).get('h24',0),
+                'pair': p.get('pairAddress','')
+            }
     except Exception as e:
-        print(f"Scan err {e}")
+        print(e)
     return None
 
 def bot_loop():
-    time.sleep(5)
-    send_msg("🔥 V6 FINAL ONLINE - READY FOR $10->$100\n\nFilters: MCAP 800-120k LIQ>2.5k\nFirst call in 30 seconds!")
-    seen = set([b.lower() for b in BLACKLIST])
-    first = True
+    time.sleep(3)
+    send_msg("🔥 V7 ULTRA ONLINE - Real new scan - First gem in 30s!")
+    seen=set()
+    first=True
     while True:
         try:
-            sleep_time = 30 if first else 90
-            time.sleep(sleep_time)
-            first = False
-            
+            time.sleep(30 if first else 60)
+            first=False
             gem = get_gem(seen)
-            
             if gem:
                 seen.add(gem['address'].lower())
+                if len(seen)>300: seen.clear()
                 msg = f"""🚀 NEW GEM: ${gem['symbol']}
 
 CA:
@@ -87,34 +65,23 @@ CA:
 💧 LIQ: ${int(gem['liq']):,}
 📊 VOL: ${int(gem['vol']):,}
 
-📈 CHART: https://dexscreener.com/base/{gem['pair']}
+📈 https://dexscreener.com/base/{gem['pair']}
 
-— — FLIP PLAN — —
-✅ BUY: Only if chart <1hr old & flat start
-❌ SKIP: If already up 5x
+— FLIP PLAN $10->$100 —
+✅ BUY if <30min old & chart flat
+❌ SKIP if already 5x
 
-💸 SELL PLAN:
-• At 2x -> SELL 50% (secure capital)
-• At 3x -> SELL 80% (take profit)
-• Leave 20% moonbag
-
-This is how $10 -> $100"""
-
+💸 SELL:
+2x = Sell 50% (secure)
+3x = Sell 80% (profit)
+Hold 20% moon"""
                 send_msg(msg)
-                print(f"Posted {gem['symbol']}")
-            else:
-                send_msg("✅ Bot alive - scanning Base... no safe gem this round, next scan in 90s")
-                print("No gem this round")
-
+            # Removed the spam "no safe gem" message - it will just stay quiet until it finds one
         except Exception as e:
-            print(f"Loop err {e}")
-            time.sleep(15)
+            print(e)
+            time.sleep(10)
 
 @app.route('/')
-def home():
-    return "V6 FINAL Running - $10 to $100 mode"
-
+def home(): return "V7 Running"
 threading.Thread(target=bot_loop, daemon=True).start()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+if __name__ == '__main__': app.run(host='0.0.0.0', port=10000)
