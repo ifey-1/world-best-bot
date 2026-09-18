@@ -1,53 +1,74 @@
 import os, time, requests, threading
 from flask import Flask
-from datetime import datetime
 
 app = Flask(__name__)
-
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_msg(text):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": CHANNEL_ID, "text": text, "parse_mode": "Markdown"})
-        print(f"Posted: {text[:30]}")
+        requests.post(url, json={"chat_id": CHANNEL_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True})
+        print("Posted real gem")
     except Exception as e:
         print(f"Send error: {e}")
 
+def get_real_gem():
+    try:
+        # Get latest Base pairs
+        r = requests.get("https://api.dexscreener.com/latest/dex/search/?q=base", timeout=10).json()
+        pairs = r.get('pairs', [])[:50]
+        
+        for p in pairs:
+            try:
+                if p.get('chainId') != 'base': continue
+                mcap = p.get('fdv', 0) or p.get('marketCap', 0) or 0
+                liq = p.get('liquidity', {}).get('usd', 0) or 0
+                # REAL FILTER: mcap 5k-80k, liquidity > 3k
+                if 5000 < mcap < 80000 and liq > 3000:
+                    return {
+                        'symbol': p['baseToken']['symbol'],
+                        'address': p['baseToken']['address'],
+                        'mcap': mcap,
+                        'pair': p['pairAddress']
+                    }
+            except: continue
+    except Exception as e:
+        print(f"Scan error: {e}")
+    return None
+
 def bot_loop():
     time.sleep(5)
-    send_msg("🚀 BOT ONLINE - READY ✅\n\nNext gem in 2 mins...")
-    print("Bot started!")
+    send_msg("🚀 REAL SCANNER ONLINE ✅\n\nScanning Base for real gems... Next real coin in 2 mins")
     
-    count = 1
     while True:
         try:
-            time.sleep(150) # 2.5 mins
-            # FOR TESTING - we post a test gem so you see it working
-            msg = f"""🚀 BUY $TEST{count} - WILL 20X!
+            time.sleep(150)
+            gem = get_real_gem()
+            if gem:
+                msg = f"""🚀 BUY ${gem['symbol']} - WILL 20X!
 
 CA:
-0x{count}1234567890123456789012345678901234abcd
+`{gem['address']}`
 
-💰 MCAP: $23,000
-🟢 BUY NOW - Early gem!
+💰 MCAP: ${int(gem['mcap']):,}
+💧 LIQ: Real gem on Base
+🟢 BUY NOW
 
-📈 https://dexscreener.com/base/0x123
+📈 https://dexscreener.com/base/{gem['pair']}
 
-Next call in 2.5 mins..."""
-            send_msg(msg)
-            count += 1
-            print(f"Posted call #{count}")
+⚠️ DYOR - Early call!"""
+                send_msg(msg)
+            else:
+                send_msg("🔍 Scanning... No perfect gem under $80k yet. Checking again in 2 mins.\n\nBot is active.")
         except Exception as e:
             print(f"Loop error: {e}")
             time.sleep(30)
 
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return "Real bot running!"
 
-# Start bot in background
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == '__main__':
