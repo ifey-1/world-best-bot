@@ -11,60 +11,133 @@ active_calls = {}
 calls_today = 0
 last_day = None
 
-# FIX 1: Chain map
 CHAIN_MAP = {
-    "ethereum": "ethereum",
-    "binance-smart-chain": "bsc",
-    "bsc": "bsc",
-    "solana": "solana",
-    "base": "base",
-    "arbitrum-one": "arbitrum",
-    "polygon-pos": "polygon",
-    "avalanche": "avalanche"
+    "ethereum": ("ethereum", "1"),
+    "binance-smart-chain": ("bsc", "56"),
+    "bsc": ("bsc", "56"),
+    "base": ("base", "8453"),
+    "arbitrum-one": ("arbitrum", "42161"),
+    "polygon-pos": ("polygon", "137"),
+    "avalanche": ("avalanche", "43114"),
+    "solana": ("solana", None)
 }
 
 def send(text):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHANNEL_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=25)
-    except: pass
+    except Exception as e:
+        print(f"Send error {e}")
+
+# ===== EXPERT SAFETY =====
+def check_goplus(chain_id_num, addr):
+    """Returns (is_safe, reason)"""
+    if not chain_id_num: # Solana - skip GoPlus
+        return True, "Solana skipped"
+    try:
+        url = f"https://api.gopluslabs.io/api/v1/token_security/{chain_id_num}?contract_addresses={addr}"
+        r = requests.get(url, timeout=12).json()
+        data = r.get('result', {}).get(addr.lower(), {}) or r.get('result', {}).get(addr, {})
+        if not data:
+            return False, "No GoPlus data"
+
+        # Critical checks
+        if data.get('is_honeypot') == '1':
+            return False, "HONEYPOT"
+        buy_tax = float(data.get('buy_tax', 0) or 0)
+        sell_tax = float(data.get('sell_tax', 0) or 0)
+        if buy_tax > 10 or sell_tax > 10:
+            return False, f"High Tax {buy_tax}/{sell_tax}%"
+        if data.get('is_proxy') == '1' and data.get('is_mintable') == '1':
+            return False, "Mintable Proxy"
+        if data.get('is_blacklisted') == '1':
+            return False, "Blacklisted"
+        if data.get('can_take_back_ownership') == '1':
+            return False, "Can take back ownership"
+        if data.get('owner_percent', 0):
+            try:
+                if float(data.get('owner_percent',0)) > 15:
+                    return False, f"Owner {data.get('owner_percent')}%"
+            except: pass
+        if data.get('creator_percent', 0):
+            try:
+                if float(data.get('creator_percent',0)) > 15:
+                    return False, f"Creator {data.get('creator_percent')}%"
+            except: pass
+        # Holder concentration
+        try:
+            hp = float(data.get('holder_count', 9999) or 0)
+            if hp < 50:
+                return False, f"Only {hp} holders"
+        except: pass
+
+        return True, "Safe"
+    except Exception as e:
+        print(f"GoPlus error {e}")
+        return True, f"GoPlus err skip: {e}" # Don't block if API down
 
 def get_best_pair_and_liquidity(addr_map):
+    best = None
     best_liq = 0
-    best_chain = None
-    best_addr = None
-    best_pair_url = None
 
-    for cg_chain, addr in addr_map.items():
-        if not addr: continue
-        dex_chain = CHAIN_MAP.get(cg_chain.lower())
-        if not dex_chain: continue
+    for cg_chain, token_addr in addr_map.items():
+        if not token_addr: continue
+        map_data = CHAIN_MAP.get(cg_chain.lower())
+        if not map_data: continue
+        dex_chain, goplus_id = map_data
+
         try:
-            # FIX 2: Use tokens endpoint not search
-            r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{addr}", timeout=10).json()
+            r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{token_addr}", timeout=10).json()
             pairs = r.get('pairs', []) or []
-            # Sort by liquidity
             pairs = sorted(pairs, key=lambda x: x.get('liquidity',{}).get('usd',0) or 0, reverse=True)
-            for p in pairs:
+
+            for p in pairs[:3]: # Check top 3 pairs
                 liq = p.get('liquidity', {}).get('usd', 0) or 0
-                if liq > best_liq:
-                    best_liq = liq
-                    best_chain = p.get('chainId', dex_chain)
-                    best_addr = p.get('pairAddress', addr)
-                    best_pair_url = p.get('url')
-        except: continue
+                if liq < 30000: continue
+                if liq <= best_liq: continue
+
+                fdv = p.get('fdv', 0) or 0
+                mcap = p.get('marketCap', fdv) or fdv
+                # Expert filters on pair
+                if mcap and mcap < 50000: continue # Too small = scam
+
+                pair_created = p.get('pairCreatedAt')
+                if pair_created:
+                    age_hours = (time.time()*1000 - pair_created)/1000/3600
+                    if age_hours < 2: # Less than 2h = too risky for auto bot
+                        continue
+
+                # Volume check
+                vol24 = p.get('volume', {}).get('h24', 0) or 0
+                if vol24 < 20000: continue
+
+                # SECURITY CHECK
+                pair_token_addr = p.get('baseToken', {}).get('address') or token_addr
+                is_safe, reason = check_goplus(goplus_id, pair_token_addr)
+                if not is_safe:
+                    print(f"Blocked {pair_token_addr} {dex_chain} - {reason}")
+                    continue
+
+                # Passed all
+                best_liq = liq
+                best = p
+                best['goplus_reason'] = reason
+                best['checked_addr'] = pair_token_addr
+
+        except Exception as e:
+            print(f"Dex error {e}")
+            continue
         time.sleep(0.6)
 
-    if best_liq < 30000: # Lowered for early memes
-        return None, None, 0, None
-    return best_chain, best_addr, best_liq, best_pair_url
+    if not best:
+        return None, None, 0, None, "No safe pair"
+    return best.get('chainId'), best.get('pairAddress'), best_liq, best.get('url'), best.get('goplus_reason')
 
 def get_contracts_map(coin_id):
     try:
         time.sleep(1.5)
         d = requests.get(f"https://api.coingecko.com/api/v3/coins/{coin_id}", timeout=15).json()
         plats = d.get('platforms', {})
-        # Keep original keys for mapping
         return {k: v for k,v in plats.items() if v}
     except: return {}
 
@@ -84,18 +157,18 @@ def is_gem(coin):
         ch24 = coin.get('price_change_percentage_24h',0) or 0
         vol = coin.get('total_volume',0) or 0
         mcap = coin.get('market_cap',0) or 0
-        if ch1 < 2 or ch1 > 45: return False
-        if ch24 < 1 or ch24 > 120: return False
-        if vol < 1500000: return False
-        if mcap < 300000 or mcap > 50000000: return False
-        if mcap>0 and (vol/mcap) < 0.15: return False
-        if coin['symbol'].upper() in ['BTC','ETH','SOL','BNB','XRP']: return False
+        if ch1 < 2.5 or ch1 > 40: return False
+        if ch24 < 2 or ch24 > 90: return False
+        if vol < 2000000: return False
+        if mcap < 500000 or mcap > 40000000: return False
+        if mcap>0 and (vol/mcap) < 0.20: return False
+        if coin['symbol'].upper() in ['BTC','ETH','SOL','BNB','XRP','DOGE']: return False
         return True
     except: return False
 
 def scanner():
     global calls_today, last_day
-    send("🚀 <b>V7.1 FIXED LIVE!</b>\n✅ Chain Map Fixed | Token API | Solana Ready")
+    send("🚀 <b>V8 EXPERT ANTI-RUG LIVE!</b>\n✅ GoPlus | Tax Check | Honeypot | Owner Check | Holder Check")
     time.sleep(5)
     while True:
         try:
@@ -110,6 +183,7 @@ def scanner():
                 time.sleep(180)
                 continue
 
+            # Track SL/TP
             for cid, data in list(active_calls.items()):
                 curr = next((c for c in coins if c['id']==cid), None)
                 if not curr: continue
@@ -150,8 +224,9 @@ def scanner():
                 if not addr_map:
                     time.sleep(2)
                     continue
-                chain, pair_addr, liq, pair_url = get_best_pair_and_liquidity(addr_map)
-                if not pair_addr or liq < 30000:
+                chain, pair_addr, liq, pair_url, safety = get_best_pair_and_liquidity(addr_map)
+                if not pair_addr:
+                    print(f"Skipped {best['symbol']} - {safety}")
                     time.sleep(2)
                     continue
 
@@ -185,6 +260,7 @@ def scanner():
 🎯 TP2 ${tp2:.8f} (5X) = SELL 25%
 
 📊 MCap ${mcap:.2f}M | Vol ${vol:.1f}M | Liq ${liq/1000:.0f}k | 1h +{ch1:.1f}%
+✅ Safety: {safety}
 
 📜 PAIR:
 <code>{pair_addr}</code>
@@ -194,7 +270,7 @@ Chain: {chain}
 DEX: {dex_link}
 MEXC: https://www.mexc.com/exchange/{sym}_USDT
 
-🧠 Risk 2% per trade!"""
+🧠 Risk 2% per trade! Expert Filtered!"""
 
                 send(msg)
                 active_calls[best['id']] = {'entry': entry, 'symbol': sym, 's2x': False, 's5x': False}
@@ -207,7 +283,7 @@ MEXC: https://www.mexc.com/exchange/{sym}_USDT
 
 @app.route('/')
 def home():
-    return f"V7.1 FIXED RUNNING - {calls_today}/3 today - {len(active_calls)} active"
+    return f"V8 EXPERT RUNNING - {calls_today}/3 today - {len(active_calls)} active"
 
 threading.Thread(target=scanner, daemon=True).start()
 
