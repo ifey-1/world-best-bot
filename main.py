@@ -1,86 +1,109 @@
-import os, time, requests, threading
-from flask import Flask
+import os
+import time
+import requests
+import asyncio
+from dotenv import load_dotenv
+from telegram import Bot
 
-app = Flask(__name__)
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("TELEGRAM_CHAT_ID")
+load_dotenv()
 
-BLACKLIST_ADDR = [
-"0xb2000000000000000000000005b21d8272a739ea01",
-"0x2a7dc23e29acc92ac6decf909af66a247c76076e",
-"0xf1b4ddf712e108cf43711b1c39f2fddb0d5ce243"
-]
-BLACKLIST_SYMBOL = ["BASE","WETH","USDC","USDT","WBASE","SOL","WSOL","USDC"]
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@ifeysycoai")
+# For testing without Telegram, it will just print in logs
 
-def send_msg(t):
+# ===== V8 ANTI-SCAM FILTER =====
+def is_valid_gem(pair):
     try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id":CHANNEL_ID,"text":t,"parse_mode":"Markdown","disable_web_page_preview":True},timeout=10)
-    except: pass
+        mcap = pair.get('fdv', 0) or 0
+        liquidity = pair.get('liquidity', {}).get('usd', 0) or 0
+        vol_5m = pair.get('volume', {}).get('m5', 0) or 0
+        
+        # Your V9 rules: $8K-$25K
+        if not (8000 <= mcap <= 25000):
+            return False
+        if liquidity < 3000:
+            return False
+        if vol_5m < 500:  # needs real buys
+            return False
+        # Block obvious scams
+        if pair.get('baseToken', {}).get('name','').lower() in ['scam','honeypot','test']:
+            return False
+        return True
+    except:
+        return False
 
-def get_gem(seen, chain):
+def scan_tokens():
+    gems = []
+    # Scan Base + Solana new pairs
+    for chain in ['solana', 'base']:
+        try:
+            url = f"https://api.dexscreener.com/latest/dex/search/?q={chain}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            for pair in data.get('pairs', [])[:30]:
+                if pair.get('chainId') != chain:
+                    continue
+                if is_valid_gem(pair):
+                    gems.append({
+                        'chain': chain,
+                        'name': pair['baseToken']['symbol'],
+                        'address': pair['baseToken']['address'],
+                        'mcap': int(pair.get('fdv',0)),
+                        'liq': int(pair.get('liquidity',{}).get('usd',0)),
+                        'price': pair.get('priceUsd','0'),
+                        'url': pair.get('url','')
+                    })
+        except Exception as e:
+            print(f"Scan error {chain}: {e}")
+    return gems
+
+async def post_to_telegram(gem):
+    if not BOT_TOKEN:
+        print(f"FOUND GEM (No BOT_TOKEN set): {gem}")
+        return
+    
+    bot = Bot(token=BOT_TOKEN)
+    text = f"""🔥 IFEYSYCO AI V9 GEM 🔥
+
+Token: ${gem['name']}
+Chain: {gem['chain'].upper()}
+Entry MC: ${gem['mcap']:,}
+Liquidity: ${gem['liq']:,}
+
+Contract: `{gem['address']}`
+
+Chart: {gem['url']}
+
+Strategy: $2.5 in | Sell 2x / 5x / 10x
+Bot: @ifeysycoai
+"""
     try:
-        # Search chain
-        r = requests.get(f"https://api.dexscreener.com/latest/dex/search/?q={chain}",timeout=15).json()
-        pairs = sorted(r.get('pairs',[]), key=lambda x: x.get('pairCreatedAt',0) or 0, reverse=True)[:150]
-        for p in pairs:
-            if p.get('chainId')!=chain: continue
-            sym = p.get('baseToken',{}).get('symbol','').upper()
-            addr = p.get('baseToken',{}).get('address','').lower()
-            if not addr or addr in seen: continue
-            if addr in [b.lower() for b in BLACKLIST_ADDR]: continue
-            if sym in BLACKLIST_SYMBOL: continue
-            if len(sym)>12: continue
+        await bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode='Markdown')
+        print(f"Posted {gem['name']}")
+    except Exception as e:
+        print(f"Telegram error: {e}")
+        print(text)
 
-            mcap = p.get('fdv',0) or p.get('marketCap',0) or 0
-            liq = p.get('liquidity',{}).get('usd',0) or 0
-            h1 = p.get('priceChange',{}).get('h1',0) or 0
-            m5_buys = p.get('txns',{}).get('m5',{}).get('buys',0) or 0
-
-            # === V9 EARLY-HOLD FILTERS - LET IT MOVE ===
-            if not (8000 < mcap < 25000): continue  # Super early like $14.3K
-            if liq < 1500: continue
-            if h1 > 70: continue  # Skip already pumped tops
-            if m5_buys < 1: continue
-            if len(seen) > 5000: seen.clear() # reset
-
-            return {'symbol':sym,'address':p['baseToken']['address'],'mcap':mcap,'liq':liq,'h1':h1,'buys':m5_buys,'pair':p['pairAddress'],'chain':chain}
-    except Exception as e: print(f"{chain} error", e)
-    return None
-
-def bot_loop():
-    time.sleep(3)
-    send_msg("🔥 *V9-DUAL EARLY-HOLD ONLINE*\nBase + Solana hunting $8K-$25K\n1 call per 1-2 days - but 10x-50x setup. Let it move!")
-    seen=set([b.lower() for b in BLACKLIST_ADDR])
+async def main():
+    print("=== IFEYSYCO WORLD BEST BOT STARTED ===")
+    print("Scanning Base + Solana $8K-$25K V9 Filter")
+    seen = set()
+    
     while True:
         try:
-            for chain in ["solana", "base"]: # SOL first - more 100x
-                gem=get_gem(seen, chain)
-                if gem:
-                    seen.add(gem['address'].lower())
-                    send_msg(f"""🔥 *V9 EARLY GEM - LET IT MOVE* [{gem['chain'].upper()}]
-
-💎 ${gem['symbol']} | MC ${int(gem['mcap']):,}
-💧 LIQ ${int(gem['liq']):,} | 1H {gem['h1']}% | Buys {gem['buys']}
-
-CA:
-`{gem['address']}`
-
-📈 https://dexscreener.com/{gem['chain']}/{gem['pair']}
-
-— *PLAN - LET IT MOVE 2 DAYS* —
-BUY $2 NOW at ${int(gem['mcap']):,}
-SELL 2x = 50% (free bag)
-SELL 5x = 25%
-HOLD 25% for 48H for 10x-50x
-
-Don't scalp. Let it move.""")
-                    time.sleep(5) # avoid spam
-            time.sleep(45)
+            gems = scan_tokens()
+            if not gems:
+                print("No gems this scan - market quiet, holding...")
+            for gem in gems:
+                if gem['address'] in seen:
+                    continue
+                seen.add(gem['address'])
+                await post_to_telegram(gem)
+                await asyncio.sleep(5)
+            await asyncio.sleep(15)
         except Exception as e:
-            print(e); time.sleep(10)
+            print(f"Loop error: {e}")
+            await asyncio.sleep(15)
 
-@app.route('/')
-def home(): return "V9-DUAL EARLY-HOLD Running - $8K-$25K"
-threading.Thread(target=bot_loop,daemon=True).start()
-if __name__=='__main__': app.run(host='0.0.0.0',port=10000)
+if __name__ == "__main__":
+    asyncio.run(main())
